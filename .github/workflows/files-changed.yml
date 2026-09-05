@@ -2,6 +2,15 @@ name: files-changed
 
 on:
   workflow_call:
+    inputs:
+      chalk_on:
+        description: "racecar: instrumented arm switch, passed down by the caller"
+        type: string
+        default: "false"
+      profile:
+        description: "CrashOverride chalk profile"
+        type: string
+        default: curiosity-tests-racecar
     outputs:
       backend:
         value: ${{ jobs.detect.outputs.backend }}
@@ -30,16 +39,22 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  # The one variable that separates the arms: on baseline, action-checkout
+  # skips its Set up Chalk step entirely.
+  CHALK_ON: ${{ inputs.chalk_on }}
 
 jobs:
   detect:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
-      backend: ${{ steps.changes.outputs.backend }}
+      backend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changes.outputs.backend }}
       frontend: ${{ steps.changes.outputs.frontend }}
       docs: ${{ steps.changes.outputs.docs }}
-      actions: ${{ steps.changes.outputs.actions }}
+      actions: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changes.outputs.actions }}
       templates: ${{ steps.changes.outputs.templates }}
       docker: ${{ steps.changes.outputs.docker }}
       dockerfile: ${{ steps.changes.outputs.dockerfile }}
@@ -49,7 +64,19 @@ jobs:
       e2e: ${{ steps.changes.outputs.e2e }}
       shell: ${{ steps.changes.outputs.shell }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
+        with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: changes
         with:
